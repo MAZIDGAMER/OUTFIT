@@ -1,5 +1,4 @@
-Flask
-Pillow
-requests
-aiohttp
-tenacity
+flask
+pillow
+gunicorn
+gevent
