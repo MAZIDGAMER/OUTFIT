@@ -38,7 +38,7 @@ DEFAULT_POSITIONS = {
     'pets': [
         {'position': (952, 1052), 'size': (150, 150)}   # Pet item
     ],
-    'name': {'position': (638, 175), 'max_width': 500}  # Name position
+    'name': {'position': (638, 164), 'max_width': 500}  # Name position
 }
 
 # Default items
@@ -99,6 +99,8 @@ CATEGORIES = {
 ITEM_CATEGORY_CACHE = {}
 CACHE_EXPIRY = 300
 FONT_CACHE = None
+PLAYER_DATA_CACHE = {}
+PLAYER_DATA_CACHE_EXPIRY = 600  # 10 minutes cache for player data
 
 def get_font():
     global FONT_CACHE
@@ -163,19 +165,71 @@ def draw_text_with_outline(draw, position, text, font, text_color, outline_color
     draw.text(position, text, font=font, fill=text_color)
 
 def fetch_player_data(uid, region):
+    cache_key = f"{uid}_{region}"
+    cached_data = PLAYER_DATA_CACHE.get(cache_key)
+    
+    if cached_data and time.time() - cached_data['time'] < PLAYER_DATA_CACHE_EXPIRY:
+        return cached_data['data']
+    
     try:
-        response = requests.get(DATA_API_URL.format(uid=uid, region=region), timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            "avatar_id": str(data["profileInfo"]["avatarId"]),
-            "outfits": data["profileInfo"]["equippedSkills"],
-            "weapons": data["basicInfo"]["weaponSkinShows"],
-            "pets": [str(data["petInfo"]["petId"])],
-            "player_name": data["basicInfo"]["nickname"]
-        }
+        # Add retry mechanism for API requests
+        max_retries = 3
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    DATA_API_URL.format(uid=uid, region=region),
+                    timeout=5,
+                    headers={
+                        'User-Agent': 'FreeFireOutfitRenderer/1.0',
+                        'Accept': 'application/json'
+                    }
+                )
+                
+                # Check for rate limiting
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        response.raise_for_status()
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Validate and normalize the response data
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid API response format")
+                
+                profile_info = data.get("profileInfo", {})
+                basic_info = data.get("basicInfo", {})
+                pet_info = data.get("petInfo", {})
+                
+                result = {
+                    "avatar_id": str(profile_info.get("avatarId", DEFAULT_ITEMS['character'])),
+                    "outfits": profile_info.get("equippedSkills", []),
+                    "weapons": basic_info.get("weaponSkinShows", [DEFAULT_ITEMS['weapons']]),
+                    "pets": [str(pet_info.get("petId", DEFAULT_ITEMS['pets']))],
+                    "player_name": basic_info.get("nickname", "").strip()
+                }
+                
+                # Cache the successful response
+                PLAYER_DATA_CACHE[cache_key] = {
+                    'data': result,
+                    'time': time.time()
+                }
+                
+                return result
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    print(f"Failed to fetch player data after {max_retries} attempts: {e}")
+                    return None
+                time.sleep(retry_delay * (attempt + 1))
+                
     except Exception as e:
-        print(f"Error fetching player data: {e}")
+        print(f"Error processing player data: {e}")
         return None
 
 @app.route("/render-image")
@@ -188,16 +242,23 @@ def render_image():
     if not uid or not region:
         return Response("Missing UID or region", status=400)
 
-    # Fetch player data from API
+    # Fetch player data from API with enhanced error handling
     player_data = fetch_player_data(uid, region)
     if not player_data:
-        return Response("Failed to fetch player data", status=500)
+        # Fallback to default items if API fails
+        player_data = {
+            "avatar_id": DEFAULT_ITEMS['character'],
+            "outfits": [],
+            "weapons": [DEFAULT_ITEMS['weapons']],
+            "pets": [DEFAULT_ITEMS['pets']],
+            "player_name": f"Player {uid}"
+        }
 
-    avatar_id = player_data["avatar_id"] or DEFAULT_ITEMS['character']
+    avatar_id = player_data["avatar_id"]
     outfits = player_data["outfits"]
-    weapons = player_data["weapons"] or [DEFAULT_ITEMS['weapons']]
-    pets = player_data["pets"] or [DEFAULT_ITEMS['pets']]
-    player_name = player_data["player_name"].strip()
+    weapons = player_data["weapons"]
+    pets = player_data["pets"]
+    player_name = player_data["player_name"]
 
     # Prepare items by category
     category_items = {
@@ -316,4 +377,4 @@ def render_image():
     return send_file(output, mimetype="image/png")
 
 if __name__ == "__main__":
-    app.run()
+    app.run(threaded=True)
