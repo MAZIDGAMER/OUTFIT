@@ -9,7 +9,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-ASSET_BASE_URL = "https://freefireoutfitapi.mazidgamer.xyz/hi"
+ASSET_BASE_URL = "https://outfitapi.mazidgamer.xyz/hi"
 DATA_API_URL = "https://mazidgmrinfoapi.vercel.app/get?uid={uid}&region={region}"
 
 # Default positions and sizes for all items
@@ -377,4 +377,4 @@ def render_image():
     return send_file(output, mimetype="image/png")
 
 if __name__ == "__main__":
-    app.run(threaded=True)
+    app.run(host="0.0.0.0", port=5000, threaded=True)
