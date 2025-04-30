@@ -8,16 +8,20 @@ import textwrap
 import os
 from io import BytesIO
 import json
+import logging
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 ASSET_BASE_URL = "https://freefireassetskeymg00.mazidgamer.xyz"
 ITEM_FOLDER = "FF%20ITEMS"
 TEMPLATE_URL = f"{ASSET_BASE_URL}/template.png"
 
 # Cache expiry times
-DEFAULT_CACHE_EXPIRY = 300  # 5 minutes for most images
-TEMPLATE_CACHE_EXPIRY = 86400  # 24 hours for template image
+IMAGE_CACHE_EXPIRY = 86400  # 24 hours for all images
 
 # Default positions for items
 DEFAULT_POSITIONS = {
@@ -40,10 +44,11 @@ DEFAULT_POSITIONS = {
         {'position': (326, 1028), 'size': (200, 200)}  # Footwear item
     ],
     'weapons': [
-        {'position': (1056, 820), 'size': (500, 150)}  # Weapon item 1
+        {'position': (1056, 794), 'size': (500, 150)},  # Weapon item 1
+        {'position': (1156, 894), 'size': (500, 150)}   # Weapon item 2
     ],
     'pets': [
-        {'position': (952, 1052), 'size': (180, 180)}   # Pet item
+        {'position': (952, 1052), 'size': (150, 150)}   # Pet item
     ],
     'name': {'position': (638, 164), 'max_width': 500}  # Name position
 }
@@ -96,42 +101,65 @@ CATEGORIES = {
 
 # Default items for all outfit categories and weapons
 DEFAULT_ITEMS = {
+    'head': ["907100011", "907100013"],
     'mask': ["214000000"],
-    'top': ["203000000"],
-    "weapons": ["907101817"]
+    'top': ["203000000", "908100013"],
+    'bottom': ["909100001"],
+    'footwear': ["910100001"],
+    'weapons': ["907101817", "907101818"]
 }
 
-# Load item_categories.json
+# Global caches
 ITEM_CATEGORIES = {}
-try:
-    with open("item_categories.json", 'r') as f:
-        ITEM_CATEGORIES = json.load(f)
-except FileNotFoundError:
-    print("Warning: item_categories.json not found")
-except json.JSONDecodeError:
-    print("Warning: item_categories.json is invalid JSON")
-
 ITEM_CATEGORY_CACHE = {}
 IMAGE_CACHE = {}
 FONT_CACHE = None
 
-def get_font():
+# Load item_categories.json at startup
+try:
+    with open("item_categories.json", 'r') as f:
+        ITEM_CATEGORIES = json.load(f)
+except FileNotFoundError:
+    logger.warning("item_categories.json not found")
+except json.JSONDecodeError:
+    logger.warning("item_categories.json is invalid JSON")
+
+# Preload template image at startup
+def preload_template():
+    logger.info("Preloading template image")
+    start_time = time.time()
+    img = download_image(TEMPLATE_URL)
+    if img:
+        logger.info(f"Template preloaded in {time.time() - start_time:.2f}s")
+    else:
+        logger.error("Failed to preload template image")
+
+# Preload font at startup
+def preload_font():
     global FONT_CACHE
-    if FONT_CACHE is None:
+    logger.info("Preloading font")
+    start_time = time.time()
+    try:
+        font_response = requests.get(FONT_URL, timeout=5)
+        font_response.raise_for_status()
+        font_data = BytesIO(font_response.content)
+        FONT_CACHE = ImageFont.truetype(font_data, FONT_SIZE)
+        logger.info(f"Font preloaded in {time.time() - start_time:.2f}s")
+    except Exception as e:
+        logger.warning(f"Failed to download font: {e}")
         try:
-            font_response = requests.get(FONT_URL, timeout=5)
-            font_data = BytesIO(font_response.content)
-            FONT_CACHE = ImageFont.truetype(font_data, FONT_SIZE)
+            FONT_CACHE = ImageFont.truetype("arial.ttf", FONT_SIZE)
+            logger.info("Using local arial.ttf font")
         except:
-            try:
-                FONT_CACHE = ImageFont.truetype("arial.ttf", FONT_SIZE)
-            except:
-                FONT_CACHE = ImageFont.load_default()
+            FONT_CACHE = ImageFont.load_default()
+            logger.info("Using default font")
+
+def get_font():
     return FONT_CACHE
 
 def find_item_category(item_id):
     cached = ITEM_CATEGORY_CACHE.get(item_id)
-    if cached and time.time() - cached['time'] < DEFAULT_CACHE_EXPIRY:
+    if cached and time.time() - cached['time'] < IMAGE_CACHE_EXPIRY:
         return cached['category']
     
     category = ITEM_CATEGORIES.get(item_id)
@@ -139,19 +167,20 @@ def find_item_category(item_id):
     return category
 
 def download_image(url):
-    cache_expiry = TEMPLATE_CACHE_EXPIRY if url == TEMPLATE_URL else DEFAULT_CACHE_EXPIRY
     cached = IMAGE_CACHE.get(url)
-    if cached and time.time() - cached['time'] < cache_expiry:
+    if cached and time.time() - cached['time'] < IMAGE_CACHE_EXPIRY:
         return Image.open(BytesIO(cached['data'])).convert("RGBA")
     
     try:
+        start_time = time.time()
         r = requests.get(url, timeout=2)
         r.raise_for_status()
         img_data = r.content
         IMAGE_CACHE[url] = {'data': img_data, 'time': time.time()}
+        logger.info(f"Downloaded {url} in {time.time() - start_time:.2f}s")
         return Image.open(BytesIO(img_data)).convert("RGBA")
     except Exception as e:
-        print(f"Error downloading {url}: {e}")
+        logger.error(f"Error downloading {url}: {e}")
         return None
 
 def draw_text_with_outline(draw, position, text, font, text_color, outline_color, outline_width):
@@ -162,9 +191,14 @@ def draw_text_with_outline(draw, position, text, font, text_color, outline_color
                 draw.text((x+dx, y+dy), text, font=font, fill=outline_color)
     draw.text(position, text, font=font, fill=text_color)
 
+# Preload assets at startup
+preload_template()
+preload_font()
+
 @app.route("/render-image")
 def render_image():
     start_time = time.time()
+    logger.info("Starting image rendering")
 
     avatar_id = request.args.get("avatarId")
     outfits = request.args.get("outfits", "")
@@ -173,6 +207,7 @@ def render_image():
     player_name = request.args.get("player_name", "").strip()
 
     if not avatar_id:
+        logger.error("Missing avatarId")
         return Response("Missing avatarId", status=400)
 
     # Initialize category items
@@ -187,6 +222,7 @@ def render_image():
     }
 
     # Process weapons (limit to 2)
+    process_start = time.time()
     for weapon in [w.strip() for w in weapons.split(",") if w.strip()][:2]:
         if weapon:
             category_items['weapons'].append(weapon)
@@ -197,19 +233,21 @@ def render_image():
             category_items['pets'].append(pet)
 
     # Process outfits (limit to 7 total)
-    outfit_items = [item.strip() for item in outfits.split(",") if item.strip()][:7]
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    outfit_items = [item.strip() for item in outfits.split(",") if w.strip()][:7]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         category_results = list(executor.map(find_item_category, outfit_items))
     
     for item_id, category in zip(outfit_items, category_results):
         if category and category in category_items:
             if len(category_items[category]) < len(DEFAULT_POSITIONS[category]):
                 category_items[category].append(item_id)
+    logger.info(f"Item processing took {time.time() - process_start:.2f}s")
 
     # Apply default items where needed
+    default_start = time.time()
     for category in ['head', 'top', 'weapons']:
         current_items = category_items[category]
-        required_count = len(DEFAULT_POSITIONS[category])  # 2 for head, top, weapons
+        required_count = len(DEFAULT_POSITIONS[category])
         if len(current_items) < required_count:
             for default_item in DEFAULT_ITEMS.get(category, [])[:required_count - len(current_items)]:
                 if default_item not in current_items:
@@ -219,16 +257,18 @@ def render_image():
 
     for category in ['mask', 'bottom', 'footwear']:
         current_items = category_items[category]
-        required_count = len(DEFAULT_POSITIONS[category])  # 1 for mask, bottom, footwear
+        required_count = len(DEFAULT_POSITIONS[category])
         if len(current_items) < required_count:
             for default_item in DEFAULT_ITEMS.get(category, [])[:required_count - len(current_items)]:
                 if default_item not in current_items:
                     category_items[category].append(default_item)
         elif len(current_items) > required_count:
             category_items[category] = current_items[:required_count]
+    logger.info(f"Default item application took {time.time() - default_start:.2f}s")
 
     # Load all images concurrently
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    download_start = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
             (executor.submit(download_image, TEMPLATE_URL), 'template', None, None)
         ]
@@ -255,14 +295,17 @@ def render_image():
                 avatar = img
             elif img:
                 item_images.append((img, target, pos_idx, item_id))
+    logger.info(f"Image downloading took {time.time() - download_start:.2f}s")
 
     if not template:
+        logger.error("Failed to load template")
         return Response("Failed to load template", status=500)
 
     # Apply character customization
+    render_start = time.time()
     if avatar:
         char_config = CHARACTER_CONFIGS.get(avatar_id, DEFAULT_POSITIONS['character'])
-        avatar = avatar.resize(char_config['size'])
+        avatar = avatar.resize(char_config['size'], resample=Image.LANCZOS)
         pos = char_config['position']
         template.paste(avatar, (pos[0] - avatar.width // 2, pos[1] - avatar.height // 2), avatar)
 
@@ -271,9 +314,9 @@ def render_image():
         pos_config = DEFAULT_POSITIONS[category][pos_idx]
         if category == 'weapons':
             weapon_size = WEAPON_STRETCH['custom'].get(item_id, WEAPON_STRETCH['default'])
-            img = img.resize((weapon_size['width'], weapon_size['height']))
+            img = img.resize((weapon_size['width'], weapon_size['height']), resample=Image.LANCZOS)
         else:
-            img = img.resize(pos_config['size'])
+            img = img.resize(pos_config['size'], resample=Image.LANCZOS)
         pos = pos_config['position']
         template.paste(img, (pos[0] - img.width // 2, pos[1] - img.height // 2), img)
 
@@ -300,12 +343,16 @@ def render_image():
             draw, (x, y), wrapped_text, font,
             FONT_COLOR, OUTLINE_COLOR, OUTLINE_WIDTH
         )
+    logger.info(f"Image rendering took {time.time() - render_start:.2f}s")
 
-    print(f"Image generated in {time.time() - start_time:.2f}s")
-
+    # Save and return image
+    output_start = time.time()
     output = io.BytesIO()
     template.save(output, "PNG", optimize=True)
     output.seek(0)
+    logger.info(f"Image saving took {time.time() - output_start:.2f}s")
+    logger.info(f"Total request took {time.time() - start_time:.2f}s")
+
     return send_file(output, mimetype="image/png")
 
 if __name__ == "__main__":
