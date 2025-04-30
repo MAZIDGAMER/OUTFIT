@@ -9,7 +9,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-ASSET_BASE_URL = "https://outfitapi.mazidgamer.xyz/hi"
+ASSET_BASE_URL = "https://www.freefireassetskeymg00.mazidgamer.xyz/public_html"
 DATA_API_URL = "https://mazidgmrinfoapi.vercel.app/get?uid={uid}&region={region}"
 
 # Default positions and sizes for all items
