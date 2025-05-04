@@ -15,7 +15,7 @@ ASSET_BASE_URL = "https://freefireassetskeymg00.mazidgamer.xyz"
 ITEM_FOLDER = "FF%20ITEMS"
 TEMPLATE_URL = f"{ASSET_BASE_URL}/template.png"
 INFO_API_URL = "https://mazidgmrinfoapi.vercel.app/get?uid={}&region={}"
-PROFILE_BANNER_API = "https://mazidgamer-avatar-banner.vercel.app/render-profile?uid={}®ion={}"
+PROFILE_BANNER_API = "https://mazidgamer-avatar-banner.vercel.app/render-profile?uid={}&region={}"
 RETRY_ATTEMPTS = 3
 RETRY_DELAY = 1  # seconds
 
@@ -51,7 +51,7 @@ DEFAULT_POSITIONS = {
         {'position': (952, 1052), 'size': (180, 180)}   # Pet item
     ],
     'profile_banner': [
-        {'position': (954, 256), 'size': (220, 60)}  # Placeholder for profile banner
+        {'position': (638, 68), 'size': (430, 100)}  # Placeholder for profile banner
     ]
 }
 
