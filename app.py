@@ -1,10 +1,9 @@
 from flask import Flask, request, send_file, Response
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import requests
 import io
 import concurrent.futures
 import time
-import textwrap
 import os
 from io import BytesIO
 import json
@@ -44,8 +43,7 @@ DEFAULT_POSITIONS = {
     ],
     'pets': [
         {'position': (952, 1052), 'size': (180, 180)}   # Pet item
-    ],
-    'name': {'position': (638, 164), 'max_width': 500}  # Name position
+    ]
 }
 
 # Weapon stretching configurations
@@ -56,13 +54,6 @@ WEAPON_STRETCH = {
         '907101818': {'width': 500, 'height': 150}   # Default weapon 2
     }
 }
-
-# Font settings
-FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf"
-FONT_SIZE = 40
-FONT_COLOR = (255, 255, 255)
-OUTLINE_COLOR = (0, 0, 0)
-OUTLINE_WIDTH = 2
 
 # Custom character configurations
 CHARACTER_CONFIGS = {
@@ -113,21 +104,6 @@ except json.JSONDecodeError:
 
 ITEM_CATEGORY_CACHE = {}
 IMAGE_CACHE = {}
-FONT_CACHE = None
-
-def get_font():
-    global FONT_CACHE
-    if FONT_CACHE is None:
-        try:
-            font_response = requests.get(FONT_URL, timeout=5)
-            font_data = BytesIO(font_response.content)
-            FONT_CACHE = ImageFont.truetype(font_data, FONT_SIZE)
-        except:
-            try:
-                FONT_CACHE = ImageFont.truetype("arial.ttf", FONT_SIZE)
-            except:
-                FONT_CACHE = ImageFont.load_default()
-    return FONT_CACHE
 
 def find_item_category(item_id):
     cached = ITEM_CATEGORY_CACHE.get(item_id)
@@ -154,14 +130,6 @@ def download_image(url):
         print(f"Error downloading {url}: {e}")
         return None
 
-def draw_text_with_outline(draw, position, text, font, text_color, outline_color, outline_width):
-    x, y = position
-    for dx in [-outline_width, 0, outline_width]:
-        for dy in [-outline_width, 0, outline_width]:
-            if dx != 0 or dy != 0:
-                draw.text((x+dx, y+dy), text, font=font, fill=outline_color)
-    draw.text(position, text, font=font, fill=text_color)
-
 @app.route("/render-image")
 def render_image():
     start_time = time.time()
@@ -170,7 +138,6 @@ def render_image():
     outfits = request.args.get("outfits", "")
     weapons = request.args.get("weapons", "")
     pets = request.args.get("pets", "")
-    player_name = request.args.get("player_name", "").strip()
 
     if not avatar_id:
         return Response("Missing avatarId", status=400)
@@ -276,30 +243,6 @@ def render_image():
             img = img.resize(pos_config['size'])
         pos = pos_config['position']
         template.paste(img, (pos[0] - img.width // 2, pos[1] - img.height // 2), img)
-
-    # Add player name if provided
-    if player_name:
-        draw = ImageDraw.Draw(template)
-        font = get_font()
-        max_width = DEFAULT_POSITIONS['name']['max_width']
-        avg_char_width = font.getlength("A")
-        max_chars = int(max_width / avg_char_width)
-        
-        if font.getlength(player_name) > max_width:
-            wrapped_text = textwrap.fill(player_name, width=max_chars)
-        else:
-            wrapped_text = player_name
-        
-        text_bbox = draw.textbbox((0, 0), wrapped_text, font=font)
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
-        x = DEFAULT_POSITIONS['name']['position'][0] - text_width // 2
-        y = DEFAULT_POSITIONS['name']['position'][1] - text_height // 2
-        
-        draw_text_with_outline(
-            draw, (x, y), wrapped_text, font,
-            FONT_COLOR, OUTLINE_COLOR, OUTLINE_WIDTH
-        )
 
     print(f"Image generated in {time.time() - start_time:.2f}s")
 
