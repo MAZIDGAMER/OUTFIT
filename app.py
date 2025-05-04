@@ -20,9 +20,9 @@ RETRY_ATTEMPTS = 3
 RETRY_DELAY = 1  # seconds
 
 # Cache expiry times
-DEFAULT_CACHE_EXPIRY = 300  # 5 minutes for most images
+DEFAULT_CACHE_EXPIRY = 86400  # 5 minutes for most images
 TEMPLATE_CACHE_EXPIRY = 86400  # 24 hours for template image
-PROFILE_BANNER_CACHE_EXPIRY = 300  # 5 minutes for profile banner
+PROFILE_BANNER_CACHE_EXPIRY = 60  # 5 minutes for profile banner
 
 # Default positions for items including profile banner
 DEFAULT_POSITIONS = {
