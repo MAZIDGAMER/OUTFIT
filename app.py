@@ -7,18 +7,24 @@ import time
 import os
 from io import BytesIO
 import json
+import uuid
 
 app = Flask(__name__)
 
 ASSET_BASE_URL = "https://freefireassetskeymg00.mazidgamer.xyz"
 ITEM_FOLDER = "FF%20ITEMS"
 TEMPLATE_URL = f"{ASSET_BASE_URL}/template.png"
+INFO_API_URL = "https://mazidgmrinfoapi.vercel.app/get?uid={}&region={}"
+PROFILE_BANNER_API = "https://mazidgamer-avatar-banner.vercel.app/render-profile?uid={}®ion={}"
+RETRY_ATTEMPTS = 3
+RETRY_DELAY = 1  # seconds
 
 # Cache expiry times
 DEFAULT_CACHE_EXPIRY = 300  # 5 minutes for most images
 TEMPLATE_CACHE_EXPIRY = 86400  # 24 hours for template image
+PROFILE_BANNER_CACHE_EXPIRY = 300  # 5 minutes for profile banner
 
-# Default positions for items
+# Default positions for items including profile banner
 DEFAULT_POSITIONS = {
     'character': {'position': (660, 750), 'size': (800, 1000)},
     'head': [
@@ -43,6 +49,9 @@ DEFAULT_POSITIONS = {
     ],
     'pets': [
         {'position': (952, 1052), 'size': (180, 180)}   # Pet item
+    ],
+    'profile_banner': [
+        {'position': (954, 256), 'size': (220, 60)}  # Placeholder for profile banner
     ]
 }
 
@@ -82,7 +91,8 @@ CATEGORIES = {
     'footwear': 'footwear',
     'weapons': 'weapons',
     'pets': 'pets',
-    'character': 'character'
+    'character': 'character',
+    'profile_banner': 'profile_banner'
 }
 
 # Default items for all outfit categories and weapons
@@ -114,33 +124,69 @@ def find_item_category(item_id):
     ITEM_CATEGORY_CACHE[item_id] = {'category': category, 'time': time.time()}
     return category
 
-def download_image(url):
-    cache_expiry = TEMPLATE_CACHE_EXPIRY if url == TEMPLATE_URL else DEFAULT_CACHE_EXPIRY
-    cached = IMAGE_CACHE.get(url)
-    if cached and time.time() - cached['time'] < cache_expiry:
-        return Image.open(BytesIO(cached['data'])).convert("RGBA")
-    
-    try:
-        r = requests.get(url, timeout=2)
-        r.raise_for_status()
-        img_data = r.content
-        IMAGE_CACHE[url] = {'data': img_data, 'time': time.time()}
-        return Image.open(BytesIO(img_data)).convert("RGBA")
-    except Exception as e:
-        print(f"Error downloading {url}: {e}")
-        return None
+def download_image_with_retry(url, cache_expiry=DEFAULT_CACHE_EXPIRY):
+    for attempt in range(RETRY_ATTEMPTS):
+        cached = IMAGE_CACHE.get(url)
+        if cached and time.time() - cached['time'] < cache_expiry:
+            return Image.open(BytesIO(cached['data'])).convert("RGBA")
+        
+        try:
+            r = requests.get(url, timeout=2)
+            r.raise_for_status()
+            img_data = r.content
+            IMAGE_CACHE[url] = {'data': img_data, 'time': time.time()}
+            return Image.open(BytesIO(img_data)).convert("RGBA")
+        except Exception as e:
+            print(f"Attempt {attempt + 1}/{RETRY_ATTEMPTS} failed for {url}: {e}")
+            if attempt < RETRY_ATTEMPTS - 1:
+                time.sleep(RETRY_DELAY)
+            continue
+    print(f"Failed to download {url} after {RETRY_ATTEMPTS} attempts")
+    return None
+
+def fetch_player_data_with_retry(uid, region):
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            response = requests.get(INFO_API_URL.format(uid, region), timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            return data
+        except Exception as e:
+            print(f"Attempt {attempt + 1}/{RETRY_ATTEMPTS} failed for player data: {e}")
+            if attempt < RETRY_ATTEMPTS - 1:
+                time.sleep(RETRY_DELAY)
+            continue
+    print(f"Failed to fetch player data after {RETRY_ATTEMPTS} attempts")
+    return None
 
 @app.route("/render-image")
 def render_image():
     start_time = time.time()
 
-    avatar_id = request.args.get("avatarId")
-    outfits = request.args.get("outfits", "")
-    weapons = request.args.get("weapons", "")
-    pets = request.args.get("pets", "")
+    uid = request.args.get("uid")
+    region = request.args.get("region")
+
+    if not uid or not region:
+        return Response("Missing uid or region", status=400)
+
+    # Fetch player data from API with retry
+    player_data = fetch_player_data_with_retry(uid, region)
+    if not player_data:
+        return Response("Failed to fetch player data", status=500)
+
+    # Extract necessary details from API response
+    avatar_id = str(player_data.get("profileInfo", {}).get("avatarId", ""))
+    outfits = player_data.get("profileInfo", {}).get("equippedSkills", [])
+    weapons = player_data.get("basicInfo", {}).get("weaponSkinShows", [])
+    pet_id = str(player_data.get("petInfo", {}).get("petId", ""))
+
+    # Convert lists to comma-separated strings
+    outfits = ",".join(str(item) for item in outfits)
+    weapons = ",".join(str(item) for item in weapons)
+    pets = pet_id if pet_id else ""
 
     if not avatar_id:
-        return Response("Missing avatarId", status=400)
+        return Response("Missing avatarId in player data", status=400)
 
     # Initialize category items
     category_items = {
@@ -150,7 +196,8 @@ def render_image():
         'bottom': [],
         'footwear': [],
         'weapons': [],
-        'pets': []
+        'pets': [],
+        'profile_banner': [str(uuid.uuid4())]  # Unique ID for profile banner
     }
 
     # Process weapons (limit to 2)
@@ -197,17 +244,24 @@ def render_image():
     # Load all images concurrently
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
-            (executor.submit(download_image, TEMPLATE_URL), 'template', None, None)
+            (executor.submit(download_image_with_retry, TEMPLATE_URL, TEMPLATE_CACHE_EXPIRY), 'template', None, None)
         ]
         if avatar_id:
             futures.append(
-                (executor.submit(download_image, f"{ASSET_BASE_URL}/{ITEM_FOLDER}/{avatar_id}.png"), 'avatar', None, avatar_id)
+                (executor.submit(download_image_with_retry, f"{ASSET_BASE_URL}/{ITEM_FOLDER}/{avatar_id}.png"), 'avatar', None, avatar_id)
             )
         
+        # Add profile banner
+        futures.append(
+            (executor.submit(download_image_with_retry, PROFILE_BANNER_API.format(uid, region), PROFILE_BANNER_CACHE_EXPIRY), 'profile_banner', 0, category_items['profile_banner'][0])
+        )
+
         for category, items in category_items.items():
+            if category == 'profile_banner':
+                continue
             for i, item_id in enumerate(items[:len(DEFAULT_POSITIONS[category])]):
                 futures.append(
-                    (executor.submit(download_image, f"{ASSET_BASE_URL}/{ITEM_FOLDER}/{item_id}.png"), category, i, item_id)
+                    (executor.submit(download_image_with_retry, f"{ASSET_BASE_URL}/{ITEM_FOLDER}/{item_id}.png"), category, i, item_id)
                 )
 
         # Collect results
