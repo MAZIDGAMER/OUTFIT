@@ -67,7 +67,7 @@ WEAPON_STRETCH = {
 # Custom character configurations
 CHARACTER_CONFIGS = {
     '102000024': {'position': (650, 750), 'size': (750, 900)},
-    '102000004': {'position': (650, 720), 'size': (700, 1000)},
+    '102000004': {'position': (670, 720), 'size': (530, 1100)},
     '101000006': {'position': (720, 750), 'size': (750, 1000)},
     '101000020': {'position': (630, 750), 'size': (800, 1000)},
     '101000023': {'position': (680, 750), 'size': (750, 950)},
